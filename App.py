@@ -34,9 +34,8 @@ METODI_PAGAMENTO = ["Contanti", "Satispay", "Carta di Credito"]
 
 # ---------------- FUNZIONI ----------------
 def get_google_sheet_client():
-    # Usa st.secrets["GOOGLE_CREDENTIALS"] per autenticazione su Streamlit Cloud
-    import json
-    creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+    # st.secrets["GOOGLE_CREDENTIALS"] è già un dict
+    creds_dict = st.secrets["GOOGLE_CREDENTIALS"]
     scopes = ["https://www.googleapis.com/auth/spreadsheets",
               "https://www.googleapis.com/auth/drive"]
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
@@ -76,7 +75,10 @@ with col_form:
             st.warning(f"L'orario deve essere tra {orario_min.strftime('%H:%M')} e {orario_max.strftime('%H:%M')}")
 
         prezzo_sel = st.selectbox("Prezzo (€)", OPZIONI_PREZZO)
-        prezzo_finale = st.number_input("Inserisci importo (€)", min_value=0.0, step=1.0) if prezzo_sel=="Altro" else float(prezzo_sel.replace(" €",""))
+        prezzo_finale = st.number_input(
+            "Inserisci importo (€)", 
+            min_value=0.0, step=1.0
+        ) if prezzo_sel == "Altro" else float(prezzo_sel.replace(" €",""))
 
         submit = st.form_submit_button("✅ REGISTRA LAVAGGIO", disabled=not submit_enabled)
         if submit:
@@ -132,13 +134,21 @@ with col_lista:
                         st.session_state.rerun_flag = not st.session_state.rerun_flag
                         break
 
-            st.selectbox(f"Prezzo {idx}", OPZIONI_PREZZO,
-                         index=OPZIONI_PREZZO.index(st.session_state[key_prezzo_sel]),
-                         key=key_prezzo_sel, on_change=aggiorna_prezzo)
+            st.selectbox(
+                f"Prezzo {idx}", OPZIONI_PREZZO,
+                index=OPZIONI_PREZZO.index(st.session_state[key_prezzo_sel]),
+                key=key_prezzo_sel, on_change=aggiorna_prezzo
+            )
 
             if st.session_state[key_prezzo_sel]=="Altro":
-                st.number_input("Importo personalizzato (€)", min_value=0.0, value=st.session_state.get(key_prezzo_custom,0.0),
-                                step=1.0, key=key_prezzo_custom, on_change=aggiorna_prezzo)
+                st.number_input(
+                    "Importo personalizzato (€)",
+                    min_value=0.0,
+                    value=st.session_state.get(key_prezzo_custom,0.0),
+                    step=1.0,
+                    key=key_prezzo_custom,
+                    on_change=aggiorna_prezzo
+                )
 
             # Metodo pagamento
             key_metodo = f"metodo_{idx}"
@@ -156,9 +166,11 @@ with col_lista:
                         st.session_state.rerun_flag = not st.session_state.rerun_flag
                         break
 
-            st.selectbox(f"Metodo {idx}", METODI_PAGAMENTO,
-                         index=METODI_PAGAMENTO.index(st.session_state[key_metodo]),
-                         key=key_metodo, on_change=aggiorna_metodo)
+            st.selectbox(
+                f"Metodo {idx}", METODI_PAGAMENTO,
+                index=METODI_PAGAMENTO.index(st.session_state[key_metodo]),
+                key=key_metodo, on_change=aggiorna_metodo
+            )
 
             # Cancellazione riga
             with cols[4]:
