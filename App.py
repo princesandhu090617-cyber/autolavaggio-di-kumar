@@ -1,46 +1,73 @@
 import streamlit as st
 import pandas as pd
 import gspread
+import io
 from google.oauth2.service_account import Credentials
 from datetime import datetime, date, time as dt_time
+from fpdf import FPDF
 
-# ---------------- CONFIGURAZIONE STREAMLIT ----------------
+# ---------------- CONFIG STREAMLIT ----------------
 st.set_page_config(page_title="Gestione Autolavaggio", layout="wide")
 
-# Variabile per simulare il rerun
-if "rerun_flag" not in st.session_state:
-    st.session_state.rerun_flag = False
+# ---------------- STILE MOBILE ----------------
+st.markdown("""
+<style>
+button { width: 100%; height: 3em; font-size: 16px; }
+div[data-testid="column"] { padding: 0.3rem; }
+</style>
+""", unsafe_allow_html=True)
 
-# ---------------- CONFIGURAZIONE GOOGLE SHEETS ----------------
+# ---------------- GOOGLE SHEETS ----------------
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1ilp2TuerFsgcbt0qLyMRq7rrmqW5OQQisTj9l4n7-Vw/edit"
 TAB_NAME = "Lavaggi"
 
-# ---------------- DATI STATICI ----------------
+# ---------------- MARCHE AUTO (COMPLETE) ----------------
 MARCHE_AUTO = [
     "Abarth","Acura","Alfa Romeo","Aston Martin","Audi","Bentley","BMW","Bugatti",
     "Cadillac","Chevrolet","Chrysler","Citroën","Cupra","Dacia","Daewoo","Daihatsu",
     "Dodge","DS","Ferrari","Fiat","Ford","Genesis","GMC","Honda","Hummer","Hyundai",
     "Infiniti","Isuzu","Jaguar","Jeep","Kia","Koenigsegg","Lamborghini","Lancia",
-    "Land Rover","Lexus","Lotus","Maserati","Maybach","Mazda","McLaren","Mercedes-Benz",
-    "Mini","Mitsubishi","Nissan","Opel","Pagani","Peugeot","Porsche","Ram","Renault",
-    "Rolls-Royce","Saab","Seat","Skoda","Smart","SsangYong","Subaru","Suzuki","Tesla",
-    "Toyota","Volkswagen","Volvo","BYD","Chery","Geely","Great Wall","MG","Nio",
-    "Polestar","Xpeng","Altro"
+    "Land Rover","Lexus","Lotus","Maserati","Maybach","Mazda","McLaren",
+    "Mercedes-Benz","Mini","Mitsubishi","Nissan","Opel","Pagani","Peugeot",
+    "Porsche","Ram","Renault","Rolls-Royce","Saab","Seat","Skoda","Smart",
+    "SsangYong","Subaru","Suzuki","Tesla","Toyota","Volkswagen","Volvo",
+    "BYD","Chery","Geely","Great Wall","MG","Nio","Polestar","Xpeng","Altro"
 ]
 
+# ---------------- LOGHI AUTO (URL SICURI) ----------------
+LOGHI_AUTO = {
+    "Abarth": "https://upload.wikimedia.org/wikipedia/commons/7/7f/Abarth-logo.svg",
+    "Alfa Romeo": "https://upload.wikimedia.org/wikipedia/commons/2/2b/Alfa_Romeo_Logo.svg",
+    "Audi": "https://upload.wikimedia.org/wikipedia/commons/6/6f/Audi_logo.svg",
+    "BMW": "https://upload.wikimedia.org/wikipedia/commons/4/44/BMW.svg",
+    "Ferrari": "https://upload.wikimedia.org/wikipedia/en/d/d1/Ferrari-Logo.svg",
+    "Fiat": "https://upload.wikimedia.org/wikipedia/commons/1/12/Fiat_logo.svg",
+    "Ford": "https://upload.wikimedia.org/wikipedia/commons/3/3e/Ford_logo_flat.svg",
+    "Lamborghini": "https://upload.wikimedia.org/wikipedia/en/d/df/Lamborghini_Logo.svg",
+    "Mercedes-Benz": "https://upload.wikimedia.org/wikipedia/commons/9/90/Mercedes-Logo.svg",
+    "Mini": "https://upload.wikimedia.org/wikipedia/commons/1/14/MINI_logo.svg",
+    "Peugeot": "https://upload.wikimedia.org/wikipedia/commons/5/5e/Peugeot_Logo.svg",
+    "Porsche": "https://upload.wikimedia.org/wikipedia/en/4/4d/Porsche_logo.svg",
+    "Renault": "https://upload.wikimedia.org/wikipedia/commons/9/9d/Renault_Logo.svg",
+    "Tesla": "https://upload.wikimedia.org/wikipedia/commons/b/bd/Tesla_Motors.svg",
+    "Toyota": "https://upload.wikimedia.org/wikipedia/commons/9/9d/Toyota_logo.svg",
+    "Volkswagen": "https://upload.wikimedia.org/wikipedia/commons/6/6d/Volkswagen_logo_2019.svg"
+}
+
 TIPI_LAVAGGIO = ["Solo fuori", "Solo dentro", "Dentro e fuori", "Igienizzazione sedili"]
-OPZIONI_PREZZO = ["5 €", "8 €", "10 €", "15 €", "17 €", "18 €", "20 €", "25 €", "30 €", "40 €", "80 €", "90 €", "Altro"]
 METODI_PAGAMENTO = ["Contanti", "Satispay", "Carta di Credito"]
 
 # ---------------- FUNZIONI ----------------
 def get_google_sheet_client():
-    scopes = ["https://www.googleapis.com/auth/spreadsheets",
-              "https://www.googleapis.com/auth/drive"]
-    # Usa st.secrets per le credenziali
-    creds_info = st.secrets["GOOGLE_CREDENTIALS"]
-    creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
-    client = gspread.authorize(creds)
-    return client
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    creds = Credentials.from_service_account_info(
+        st.secrets["GOOGLE_CREDENTIALS"],
+        scopes=scopes
+    )
+    return gspread.authorize(creds)
 
 @st.cache_resource(ttl=5)
 def load_data():
@@ -49,113 +76,143 @@ def load_data():
     data = sheet.get_all_records()
 
     if not data:
-        df = pd.DataFrame(columns=["Data", "Ora", "Marca", "Tipo", "Orario Consegna", "Prezzo", "Metodo"])
+        df = pd.DataFrame(columns=["Data","Ora","Marca","Tipo","Consegna","Prezzo","Metodo"])
     else:
         df = pd.DataFrame(data)
-        if "Prezzo" in df.columns:
-            df["Prezzo"] = df["Prezzo"].astype(str).str.replace(r"[^0-9.,]", "", regex=True)
-            df["Prezzo"] = df["Prezzo"].str.replace(",", ".").astype(float)
-        if "Metodo" not in df.columns:
-            df["Metodo"] = ""
+        df["Prezzo"] = (
+            df["Prezzo"].astype(str)
+            .str.replace(",", ".")
+            .str.replace(r"[^0-9.]", "", regex=True)
+            .astype(float)
+        )
+        df["Metodo"] = df["Metodo"].fillna("Contanti")
 
     return df, sheet
 
 df, sheet = load_data()
+oggi = datetime.now().strftime("%d/%m/%Y")
 
-# ---------------- LAYOUT ----------------
-col_form, col_lista = st.columns([1, 2])
+# ---------------- MENU ----------------
+st.sidebar.title("Menu")
+menu = st.sidebar.selectbox(
+    "Sezione",
+    [
+        "Nuovo Lavaggio",
+        "Auto di Oggi",
+        "Registro",
+        "Chiusura Giornaliera",
+        "Statistiche Settimanali"
+    ]
+)
 
-# ===================== FORM NUOVO LAVAGGIO =====================
-with col_form:
+# ===================== NUOVO LAVAGGIO =====================
+if menu == "Nuovo Lavaggio":
     st.header("🚿 Nuovo Lavaggio")
-    with st.form("form_lavaggio"):
-        marca = st.selectbox("Marca Auto", options=MARCHE_AUTO)
-        tipo = st.selectbox("Tipo di Lavaggio", TIPI_LAVAGGIO)
-        
-        # Orario consegna
-        ora_consegna = st.time_input("Orario previsto consegna", value=dt_time(10,0))
-        orario_min = dt_time(7,30)
-        orario_max = dt_time(20,0)
-        submit_enabled = orario_min <= ora_consegna <= orario_max
-        if not submit_enabled:
-            st.warning(f"L'orario deve essere compreso tra {orario_min.strftime('%H:%M')} e {orario_max.strftime('%H:%M')}")
-        
-        # Prezzo
-        prezzo_sel = st.selectbox("Prezzo (€)", OPZIONI_PREZZO)
-        prezzo_finale = st.number_input("Inserisci importo (€)", min_value=0.0, step=1.0) if prezzo_sel=="Altro" else float(prezzo_sel.replace(" €",""))
-        
-        submit = st.form_submit_button("✅ REGISTRA LAVAGGIO", disabled=not submit_enabled)
-        
-        if submit:
-            row = [
-                datetime.now().strftime("%d/%m/%Y"),
+
+    with st.form("lavaggio"):
+        marca = st.selectbox("Marca auto", MARCHE_AUTO)
+        tipo = st.selectbox("Tipo lavaggio", TIPI_LAVAGGIO)
+        consegna = st.time_input("Orario consegna", value=dt_time(10,0))
+        prezzo = st.number_input("Prezzo (€)", min_value=0.0, step=1.0)
+
+        if st.form_submit_button("✅ Registra"):
+            sheet.append_row([
+                oggi,
                 datetime.now().strftime("%H:%M"),
                 marca,
                 tipo,
-                ora_consegna.strftime("%H:%M"),
-                prezzo_finale,
-                ""  # Metodo pagamento vuoto inizialmente
-            ]
-            sheet.append_row(row)
-            st.success("Lavaggio registrato!")
+                consegna.strftime("%H:%M"),
+                prezzo,
+                "Contanti"
+            ])
+            st.success("Lavaggio registrato")
             st.cache_resource.clear()
-            st.session_state.rerun_flag = not st.session_state.rerun_flag
+            st.rerun()
 
-# ===================== LISTA AUTO INSERITE OGGI (aggiornamento live) =====================
-with col_lista:
-    st.header("📋 Auto Inserite Oggi")
-    oggi = datetime.now().strftime("%d/%m/%Y")
-    df_oggi = df[df["Data"]==oggi] if not df.empty else pd.DataFrame()
+# ===================== AUTO DI OGGI (CON LOGHI) =====================
+elif menu == "Auto di Oggi":
+    st.header("📋 Auto inserite oggi")
+
+    df_oggi = df[df["Data"] == oggi]
 
     if df_oggi.empty:
-        st.info("Nessuna auto inserita oggi.")
+        st.info("Nessun lavaggio oggi")
     else:
-        df_oggi_edit = df_oggi.copy()
-        df_oggi_edit["Metodo"] = df_oggi_edit["Metodo"].fillna(METODI_PAGAMENTO[0])
-        df_oggi_edit["Prezzo"] = df_oggi_edit["Prezzo"].fillna(0.0)
-        
-        edited_df = st.experimental_data_editor(df_oggi_edit[["Marca","Tipo","Prezzo","Metodo"]], num_rows="dynamic")
-        
-        for idx, row in edited_df.iterrows():
-            originale = df_oggi.iloc[idx]
-            aggiorna = False
-            if row["Prezzo"] != originale["Prezzo"] or row["Metodo"] != originale["Metodo"]:
-                aggiorna = True
-            if aggiorna:
-                cell_list = sheet.findall(originale["Ora"])
-                for cell in cell_list:
-                    riga_google = cell.row
-                    if sheet.cell(riga_google,3).value == originale['Marca'] and sheet.cell(riga_google,4).value == originale['Tipo']:
-                        sheet.update_cell(riga_google,6,row["Prezzo"])
-                        sheet.update_cell(riga_google,7,row["Metodo"])
-                        st.cache_resource.clear()
-                        st.session_state.rerun_flag = not st.session_state.rerun_flag
-                        break
+        for i, r in df_oggi.iterrows():
+            col_logo, col_info = st.columns([1,6])
 
-# ===================== REGISTRO E CHIUSURA GIORNALIERA =====================
-st.sidebar.title("Menu Autolavaggio")
-menu = st.sidebar.selectbox("Sezione", ["Registro e Calendario", "Chiusura Giornaliera"])
+            with col_logo:
+                if r["Marca"] in LOGHI_AUTO:
+                    st.image(LOGHI_AUTO[r["Marca"]], width=40)
 
-if menu == "Registro e Calendario":
+            with col_info:
+                st.markdown(
+                    f"**{r['Marca']}** — {r['Tipo']}  \n"
+                    f"💰 {r['Prezzo']} € | 💳 {r['Metodo']}"
+                )
+
+# ===================== REGISTRO =====================
+elif menu == "Registro":
     st.header("📅 Registro Lavaggi")
-    data_selezionata = st.date_input("Seleziona una data", value=date.today())
-    data_str = data_selezionata.strftime("%d/%m/%Y")
-    df_giorno = df[df["Data"]==data_str] if not df.empty else pd.DataFrame()
-    if df_giorno.empty:
-        st.info("Nessun lavaggio registrato in questa data.")
-    else:
-        st.dataframe(df_giorno, use_container_width=True)
+    data_sel = st.date_input("Seleziona data", value=date.today())
+    data_str = data_sel.strftime("%d/%m/%Y")
+    df_g = df[df["Data"] == data_str]
 
+    if df_g.empty:
+        st.info("Nessun lavaggio")
+    else:
+        st.dataframe(df_g, use_container_width=True)
+
+# ===================== CHIUSURA GIORNALIERA =====================
 elif menu == "Chiusura Giornaliera":
     st.header("📊 Chiusura del Giorno")
-    df_oggi_chiusura = df[df["Data"]==oggi] if not df.empty else pd.DataFrame()
-    if df_oggi_chiusura.empty:
-        st.warning("Nessun lavaggio registrato oggi.")
+
+    df_c = df[df["Data"] == oggi]
+
+    if df_c.empty:
+        st.warning("Nessun lavaggio oggi")
     else:
-        col1, col2 = st.columns(2)
-        col1.metric("Auto Lavate", len(df_oggi_chiusura))
-        col2.metric("Totale Incassato", f"{df_oggi_chiusura['Prezzo'].sum():.2f} €")
-        
-        st.subheader("💳 Incasso per metodo di pagamento")
-        df_incasso_metodo = df_oggi_chiusura.groupby("Metodo")["Prezzo"].sum().reindex(METODI_PAGAMENTO, fill_value=0)
-        st.table(df_incasso_metodo.rename("Totale (€)").to_frame())
+        st.metric("Auto Lavate", len(df_c))
+        st.metric("Totale Incasso", f"{df_c['Prezzo'].sum():.2f} €")
+
+        st.subheader("💳 Incasso per metodo")
+        incasso = df_c.groupby("Metodo")["Prezzo"].sum().reindex(METODI_PAGAMENTO, fill_value=0)
+        st.table(incasso.to_frame("Totale €"))
+
+        st.subheader("📊 Grafici")
+        st.bar_chart(incasso, use_container_width=True)
+        st.line_chart(df_c.groupby("Ora")["Prezzo"].sum(), use_container_width=True)
+
+        # EXPORT
+        buffer = io.BytesIO()
+        df_c.to_excel(buffer, index=False)
+
+        st.download_button(
+            "⬇️ Scarica Excel",
+            buffer.getvalue(),
+            file_name=f"chiusura_{oggi}.xlsx"
+        )
+
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", size=12)
+        pdf.cell(0,10,f"Chiusura del {oggi}",ln=True)
+        pdf.cell(0,10,f"Totale: {df_c['Prezzo'].sum():.2f} €",ln=True)
+
+        st.download_button(
+            "⬇️ Scarica PDF",
+            pdf.output(dest="S").encode("latin-1"),
+            file_name=f"chiusura_{oggi}.pdf"
+        )
+
+# ===================== STATISTICHE SETTIMANALI =====================
+else:
+    st.header("📈 Statistiche Settimanali")
+
+    df["Data_dt"] = pd.to_datetime(df["Data"], format="%d/%m/%Y")
+    settimana = df[df["Data_dt"] >= datetime.now() - pd.Timedelta(days=7)]
+
+    st.metric("Auto lavate", len(settimana))
+    st.metric("Incasso settimanale", f"{settimana['Prezzo'].sum():.2f} €")
+
+    st.line_chart(settimana.groupby("Data")["Prezzo"].sum(), use_container_width=True)
