@@ -3,18 +3,17 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, date, time as dt_time
+import json
 
 # ---------------- CONFIGURAZIONE STREAMLIT ----------------
 st.set_page_config(page_title="Gestione Autolavaggio", layout="wide")
 
-# Variabile per simulare il rerun
 if "rerun_flag" not in st.session_state:
     st.session_state.rerun_flag = False
 
 # ---------------- CONFIGURAZIONE GOOGLE SHEETS ----------------
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1ilp2TuerFsgcbt0qLyMRq7rrmqW5OQQisTj9l4n7-Vw/edit"
 TAB_NAME = "Lavaggi"
-CREDENTIALS_FILE = "credentials.json"  # Assicurati di avere questo file
 
 # ---------------- DATI STATICI ----------------
 MARCHE_AUTO = [
@@ -35,9 +34,16 @@ METODI_PAGAMENTO = ["Contanti", "Satispay", "Carta di Credito"]
 
 # ---------------- FUNZIONI ----------------
 def get_google_sheet_client():
+    """
+    Usa le credenziali direttamente da st.secrets
+    """
+    # Assicurati di aver aggiunto in Secrets un campo chiamato GOOGLE_CREDENTIALS
+    # contenente il JSON completo del service account
+    google_creds = st.secrets["GOOGLE_CREDENTIALS"]
+    creds_dict = json.loads(google_creds)
     scopes = ["https://www.googleapis.com/auth/spreadsheets",
               "https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     client = gspread.authorize(creds)
     return client
 
@@ -69,17 +75,13 @@ with col_form:
         marca = st.selectbox("Marca Auto", options=MARCHE_AUTO)
         tipo = st.selectbox("Tipo di Lavaggio", TIPI_LAVAGGIO)
         
-        # Orario consegna
         ora_consegna = st.time_input("Orario previsto consegna", value=dt_time(10,0))
         orario_min = dt_time(7,30)
         orario_max = dt_time(20,0)
-        if ora_consegna < orario_min or ora_consegna > orario_max:
+        submit_enabled = orario_min <= ora_consegna <= orario_max
+        if not submit_enabled:
             st.warning(f"L'orario deve essere compreso tra {orario_min.strftime('%H:%M')} e {orario_max.strftime('%H:%M')}")
-            submit_enabled = False
-        else:
-            submit_enabled = True
-        
-        # Prezzo
+
         prezzo_sel = st.selectbox("Prezzo (€)", OPZIONI_PREZZO)
         if prezzo_sel == "Altro":
             prezzo_finale = st.number_input("Inserisci importo (€)", min_value=0.0, step=1.0)
@@ -96,7 +98,7 @@ with col_form:
                 tipo,
                 ora_consegna.strftime("%H:%M"),
                 prezzo_finale,
-                ""  # Metodo pagamento vuoto inizialmente
+                ""
             ]
             sheet.append_row(row)
             st.success("Lavaggio registrato!")
@@ -118,8 +120,7 @@ with col_lista:
                 st.markdown(f"**{row['Marca']}**")
             with cols[1]:
                 st.markdown(f"**{row['Tipo']}**")
-            
-            # --- Prezzo automatico con gestione "Altro" ---
+            # Prezzo
             with cols[2]:
                 key_prezzo_sel = f"prezzo_sel_{idx}"
                 key_prezzo_custom = f"prezzo_custom_{idx}"
@@ -164,7 +165,7 @@ with col_lista:
                         on_change=aggiorna_prezzo
                     )
 
-            # --- Metodo di pagamento automatico ---
+            # Metodo di pagamento
             with cols[3]:
                 key_metodo = f"metodo_{idx}"
                 if key_metodo not in st.session_state:
@@ -189,7 +190,7 @@ with col_lista:
                     on_change=aggiorna_metodo
                 )
 
-            # --- Cancellazione riga ---
+            # Cancellazione riga
             with cols[4]:
                 cancella = st.button(f"❌ Cancella {idx}")
                 if cancella:
@@ -202,29 +203,3 @@ with col_lista:
                             st.cache_resource.clear()
                             st.session_state.rerun_flag = not st.session_state.rerun_flag
                             break
-
-# ===================== REGISTRO E CALENDARIO =====================
-st.sidebar.title("Menu Autolavaggio")
-menu = st.sidebar.selectbox("Sezione", ["Registro e Calendario", "Chiusura Giornaliera"])
-
-if menu == "Registro e Calendario":
-    st.header("📅 Registro Lavaggi")
-    data_selezionata = st.date_input("Seleziona una data", value=date.today())
-    data_str = data_selezionata.strftime("%d/%m/%Y")
-    df_giorno = df[df["Data"]==data_str] if not df.empty else pd.DataFrame()
-    
-    if df_giorno.empty:
-        st.info("Nessun lavaggio registrato in questa data.")
-    else:
-        st.dataframe(df_giorno, width="stretch")  # Modifica qui per avviso deprecazione
-
-elif menu == "Chiusura Giornaliera":
-    st.header("📊 Chiusura del Giorno")
-    df_oggi_chiusura = df[df["Data"]==datetime.now().strftime("%d/%m/%Y")] if not df.empty else pd.DataFrame()
-
-    if df_oggi_chiusura.empty:
-        st.warning("Nessun lavaggio registrato oggi.")
-    else:
-        col1, col2 = st.columns(2)
-        col1.metric("Auto Lavate", len(df_oggi_chiusura))
-        col2.metric("Totale Incassato", f"{df_oggi_chiusura['Prezzo'].sum():.2f} €")
