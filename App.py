@@ -101,7 +101,7 @@ with col_lista:
         st.info("Nessuna auto inserita oggi.")
     else:
         for idx, row in df_oggi.iterrows():
-            cols = st.columns([2,2,1.5,1.5,1,1])
+            cols = st.columns([2,2,1.5,1.5,1])
             with cols[0]:
                 st.markdown(f"**{row['Marca']}**")
             with cols[1]:
@@ -112,8 +112,9 @@ with col_lista:
                 key_prezzo = f"prezzo_{idx}"
                 if key_prezzo not in st.session_state:
                     st.session_state[key_prezzo] = row['Prezzo']
-                prezzo = st.number_input("", min_value=0.0, value=float(st.session_state[key_prezzo]),
+                prezzo = st.number_input("Prezzo (€)", min_value=0.0, value=float(st.session_state[key_prezzo]),
                                         step=1.0, key=key_prezzo)
+                # Aggiorna su Google Sheets
                 if prezzo != row['Prezzo']:
                     cell_list = sheet.findall(row['Ora'])
                     for cell in cell_list:
@@ -137,17 +138,6 @@ with col_lista:
                             sheet.update_cell(riga_google,7,metodo)
                             df.loc[(df["Marca"]==row['Marca']) & (df["Tipo"]==row['Tipo']) & (df["Ora"]==row['Ora']), 'Metodo'] = metodo
                             st.session_state[key_metodo] = metodo
-                            st.session_state.rerun_flag = not st.session_state.rerun_flag
-                            break
-            with cols[5]:
-                if st.button("❌", key=f"delete_{idx}"):
-                    cell_list = sheet.findall(row['Ora'])
-                    for cell in cell_list:
-                        riga_google = cell.row
-                        if sheet.cell(riga_google,3).value==row['Marca'] and sheet.cell(riga_google,4).value==row['Tipo']:
-                            sheet.delete_rows(riga_google)
-                            df, sheet = load_data()
-                            st.success(f"{row['Marca']} cancellata!")
                             st.session_state.rerun_flag = not st.session_state.rerun_flag
                             break
 
