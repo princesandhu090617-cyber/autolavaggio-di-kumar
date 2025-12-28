@@ -33,7 +33,8 @@ METODI_PAGAMENTO = ["Contanti", "Satispay", "Carta di Credito"]
 
 # ---------------- FUNZIONI ----------------
 def get_google_sheet_client():
-    creds_dict = st.secrets["GOOGLE_CREDENTIALS"]  # AttrDict direttamente
+    import json
+    creds_dict = st.secrets["GOOGLE_CREDENTIALS"]
     scopes = ["https://www.googleapis.com/auth/spreadsheets",
               "https://www.googleapis.com/auth/drive"]
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
@@ -46,9 +47,10 @@ def load_data():
     sheet = client.open_by_url(SPREADSHEET_URL).worksheet(TAB_NAME)
     data = sheet.get_all_records()
     if not data:
-        df = pd.DataFrame(columns=["Data", "Ora", "Marca", "Tipo", "Orario Consegna", "Prezzo", "Metodo"])
+        df = pd.DataFrame(columns=["Data", "Ora", "Marca", "Tipo", "Prezzo", "Metodo"])
     else:
         df = pd.DataFrame(data)
+        df.columns = [col.strip() for col in df.columns]  # rimuove spazi extra
         if "Prezzo" in df.columns:
             df["Prezzo"] = df["Prezzo"].astype(str).str.replace(r"[^0-9.,]", "", regex=True)
             df["Prezzo"] = df["Prezzo"].str.replace(",", ".").astype(float)
@@ -63,26 +65,19 @@ col_form, col_lista = st.columns([1, 2])
 with col_form:
     st.header("🚿 Nuovo Lavaggio")
     with st.form("form_lavaggio"):
-        marca = st.selectbox("Marca Auto", MARCHE_AUTO)
+        marca = st.selectbox("Marca Auto", options=MARCHE_AUTO)
         tipo = st.selectbox("Tipo di Lavaggio", TIPI_LAVAGGIO)
-        ora_consegna = st.time_input("Orario previsto consegna", value=dt_time(10,0))
-        orario_min = dt_time(7,30)
-        orario_max = dt_time(20,0)
-        submit_enabled = orario_min <= ora_consegna <= orario_max
-        if not submit_enabled:
-            st.warning(f"L'orario deve essere tra {orario_min.strftime('%H:%M')} e {orario_max.strftime('%H:%M')}")
 
         prezzo_sel = st.selectbox("Prezzo (€)", OPZIONI_PREZZO)
         prezzo_finale = st.number_input("Inserisci importo (€)", min_value=0.0, step=1.0) if prezzo_sel=="Altro" else float(prezzo_sel.replace(" €",""))
 
-        submit = st.form_submit_button("✅ REGISTRA LAVAGGIO", disabled=not submit_enabled)
+        submit = st.form_submit_button("✅ REGISTRA LAVAGGIO")
         if submit:
             row = [
                 datetime.now().strftime("%d/%m/%Y"),
                 datetime.now().strftime("%H:%M"),
                 marca,
                 tipo,
-                ora_consegna.strftime("%H:%M"),
                 prezzo_finale,
                 ""  # Metodo pagamento vuoto
             ]
@@ -96,7 +91,7 @@ with col_lista:
     st.header("📋 Auto Inserite Oggi")
     oggi = datetime.now().strftime("%d/%m/%Y")
     df_oggi = df[df["Data"]==oggi] if not df.empty else pd.DataFrame()
-    
+
     if df_oggi.empty:
         st.info("Nessuna auto inserita oggi.")
     else:
@@ -106,42 +101,72 @@ with col_lista:
                 st.markdown(f"**{row['Marca']}**")
             with cols[1]:
                 st.markdown(f"**{row['Tipo']}**")
-            with cols[2]:
-                st.markdown(f"**{row['Orario Consegna']}**")
-            with cols[3]:
-                key_prezzo = f"prezzo_{idx}"
-                if key_prezzo not in st.session_state:
-                    st.session_state[key_prezzo] = row['Prezzo']
-                prezzo = st.number_input("Prezzo (€)", min_value=0.0, value=float(st.session_state[key_prezzo]),
-                                        step=1.0, key=key_prezzo)
-                # Aggiorna su Google Sheets
-                if prezzo != row['Prezzo']:
-                    cell_list = sheet.findall(row['Ora'])
-                    for cell in cell_list:
-                        riga_google = cell.row
-                        if sheet.cell(riga_google,3).value==row['Marca'] and sheet.cell(riga_google,4).value==row['Tipo']:
-                            sheet.update_cell(riga_google,6,prezzo)
-                            df.loc[(df["Marca"]==row['Marca']) & (df["Tipo"]==row['Tipo']) & (df["Ora"]==row['Ora']), 'Prezzo'] = prezzo
-                            st.session_state[key_prezzo] = prezzo
-                            st.session_state.rerun_flag = not st.session_state.rerun_flag
-                            break
+
+            # Prezzo
+            key_prezzo_sel = f"prezzo_sel_{idx}"
+            key_prezzo_custom = f"prezzo_custom_{idx}"
+            if key_prezzo_sel not in st.session_state:
+                prezzo_val = str(int(row['Prezzo'])) + " €"
+                if prezzo_val in OPZIONI_PREZZO:
+                    st.session_state[key_prezzo_sel] = prezzo_val
+                else:
+                    st.session_state[key_prezzo_sel] = "Altro"
+                    st.session_state[key_prezzo_custom] = row['Prezzo']
+
+            def aggiorna_prezzo(idx=idx, key_prezzo_sel=key_prezzo_sel, key_prezzo_custom=key_prezzo_custom):
+                prezzo_val = st.session_state[key_prezzo_custom] if st.session_state[key_prezzo_sel]=="Altro" else float(st.session_state[key_prezzo_sel].replace(" €",""))
+                cell_list = sheet.findall(row['Ora'])
+                for cell in cell_list:
+                    riga_google = cell.row
+                    if sheet.cell(riga_google,3).value==row['Marca'] and sheet.cell(riga_google,4).value==row['Tipo']:
+                        sheet.update_cell(riga_google,5,prezzo_val)
+                        df.loc[(df["Marca"]==row['Marca']) & (df["Tipo"]==row['Tipo']) & (df["Ora"]==row['Ora']), 'Prezzo'] = prezzo_val
+                        st.session_state.rerun_flag = not st.session_state.rerun_flag
+                        break
+
+            st.selectbox(f"Prezzo {idx}", OPZIONI_PREZZO,
+                         index=OPZIONI_PREZZO.index(st.session_state[key_prezzo_sel]),
+                         key=key_prezzo_sel, on_change=aggiorna_prezzo)
+
+            if st.session_state[key_prezzo_sel]=="Altro":
+                st.number_input("Importo personalizzato (€)", min_value=0.0, value=st.session_state.get(key_prezzo_custom,0.0),
+                                step=1.0, key=key_prezzo_custom, on_change=aggiorna_prezzo)
+
+            # Metodo pagamento
+            key_metodo = f"metodo_{idx}"
+            if key_metodo not in st.session_state:
+                st.session_state[key_metodo] = row['Metodo'] if row['Metodo'] in METODI_PAGAMENTO else METODI_PAGAMENTO[0]
+
+            def aggiorna_metodo(idx=idx, key_metodo=key_metodo):
+                metodo_selezionato = st.session_state[key_metodo]
+                cell_list = sheet.findall(row['Ora'])
+                for cell in cell_list:
+                    riga_google = cell.row
+                    if sheet.cell(riga_google,3).value==row['Marca'] and sheet.cell(riga_google,4).value==row['Tipo']:
+                        sheet.update_cell(riga_google,6,metodo_selezionato)
+                        df.loc[(df["Marca"]==row['Marca']) & (df["Tipo"]==row['Tipo']) & (df["Ora"]==row['Ora']), 'Metodo'] = metodo_selezionato
+                        st.session_state.rerun_flag = not st.session_state.rerun_flag
+                        break
+
+            st.selectbox(f"Metodo {idx}", METODI_PAGAMENTO,
+                         index=METODI_PAGAMENTO.index(st.session_state[key_metodo]),
+                         key=key_metodo, on_change=aggiorna_metodo)
+
+            # Cancellazione
             with cols[4]:
-                key_metodo = f"metodo_{idx}"
-                if key_metodo not in st.session_state:
-                    st.session_state[key_metodo] = row['Metodo'] if row['Metodo'] in METODI_PAGAMENTO else METODI_PAGAMENTO[0]
-                metodo = st.selectbox("", METODI_PAGAMENTO, index=METODI_PAGAMENTO.index(st.session_state[key_metodo]), key=key_metodo)
-                if metodo != row['Metodo']:
+                cancella = st.button(f"❌ Cancella {idx}")
+                if cancella:
                     cell_list = sheet.findall(row['Ora'])
                     for cell in cell_list:
                         riga_google = cell.row
                         if sheet.cell(riga_google,3).value==row['Marca'] and sheet.cell(riga_google,4).value==row['Tipo']:
-                            sheet.update_cell(riga_google,7,metodo)
-                            df.loc[(df["Marca"]==row['Marca']) & (df["Tipo"]==row['Tipo']) & (df["Ora"]==row['Ora']), 'Metodo'] = metodo
-                            st.session_state[key_metodo] = metodo
+                            sheet.delete_rows(riga_google)
+                            df, sheet = load_data()
+                            st.success(f"Cancellato {row['Marca']}")
                             st.session_state.rerun_flag = not st.session_state.rerun_flag
                             break
 
-# ===================== SIDEBAR =====================
+# ===================== REGISTRO E CALENDARIO =====================
 st.sidebar.title("Menu Autolavaggio")
 menu = st.sidebar.selectbox("Sezione", ["Registro e Calendario", "Chiusura Giornaliera"])
 
