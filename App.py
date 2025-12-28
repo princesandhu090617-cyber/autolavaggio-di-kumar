@@ -30,7 +30,10 @@ METODI_PAGAMENTO = ["Contanti", "Satispay", "Carta di Credito"]
 
 # ---------------- FUNZIONI ----------------
 def get_google_sheet_client():
-    creds_dict = st.secrets["GOOGLE_CREDENTIALS"]
+    """
+    Usa le credenziali direttamente da st.secrets
+    """
+    creds_dict = st.secrets["GOOGLE_CREDENTIALS"]  # già dict
     scopes = ["https://www.googleapis.com/auth/spreadsheets",
               "https://www.googleapis.com/auth/drive"]
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
@@ -86,7 +89,7 @@ with col_form:
                 tipo,
                 ora_consegna.strftime("%H:%M"),
                 prezzo_finale,
-                ""
+                ""  # Metodo pagamento vuoto inizialmente
             ]
             sheet.append_row(nuova_riga)
             st.session_state.df = pd.concat([st.session_state.df,
@@ -128,6 +131,7 @@ with col_lista:
                 st.number_input("Prezzo (€)", min_value=0.0, value=st.session_state[key_prezzo],
                                 key=key_prezzo, step=1.0, on_change=aggiorna_prezzo)
 
+            # Metodo pagamento
             with cols[3]:
                 key_metodo = f"metodo_{idx}"
                 if key_metodo not in st.session_state:
