@@ -7,11 +7,11 @@ from datetime import datetime, date, time as dt_time
 # ---------------- CONFIGURAZIONE STREAMLIT ----------------
 st.set_page_config(page_title="Gestione Autolavaggio", layout="wide")
 
-# ---------------- GOOGLE SHEETS ----------------
+# ---------------- CONFIGURAZIONE GOOGLE SHEETS ----------------
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1ilp2TuerFsgcbt0qLyMRq7rrmqW5OQQisTj9l4n7-Vw/edit"
 TAB_NAME = "Lavaggi"
 
-# ---------------- DATI STATICI ----------------
+# Variabili statiche
 MARCHE_AUTO = [
     "Abarth","Acura","Alfa Romeo","Aston Martin","Audi","Bentley","BMW","Bugatti",
     "Cadillac","Chevrolet","Chrysler","Citroën","Cupra","Dacia","Daewoo","Daihatsu",
@@ -20,147 +20,162 @@ MARCHE_AUTO = [
     "Land Rover","Lexus","Lotus","Maserati","Maybach","Mazda","McLaren","Mercedes-Benz",
     "Mini","Mitsubishi","Nissan","Opel","Pagani","Peugeot","Porsche","Ram","Renault",
     "Rolls-Royce","Saab","Seat","Skoda","Smart","SsangYong","Subaru","Suzuki","Tesla",
-    "Toyota","Volkswagen","Volvo","Altro"
+    "Toyota","Volkswagen","Volvo","BYD","Chery","Geely","Great Wall","MG","Nio",
+    "Polestar","Xpeng","Altro"
 ]
-
 TIPI_LAVAGGIO = ["Solo fuori", "Solo dentro", "Dentro e fuori", "Igienizzazione sedili"]
+OPZIONI_PREZZO = ["5 €", "8 €", "10 €", "15 €", "17 €", "18 €", "20 €", "25 €", "30 €", "40 €", "80 €", "90 €", "Altro"]
 METODI_PAGAMENTO = ["Contanti", "Satispay", "Carta di Credito"]
 
 # ---------------- FUNZIONI ----------------
 def get_google_sheet_client():
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
-    creds = Credentials.from_service_account_info(
-        st.secrets["GOOGLE_CREDENTIALS"],
-        scopes=scopes
-    )
-    return gspread.authorize(creds)
+    creds_json = st.secrets["GOOGLE_CREDENTIALS"]
+    creds = Credentials.from_service_account_info(creds_json,
+        scopes=["https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive"])
+    client = gspread.authorize(creds)
+    return client
 
 @st.cache_resource(ttl=5)
 def load_data():
     client = get_google_sheet_client()
     sheet = client.open_by_url(SPREADSHEET_URL).worksheet(TAB_NAME)
     data = sheet.get_all_records()
-
     if not data:
-        df = pd.DataFrame(columns=[
-            "Data","Ora","Marca","Tipo","Orario Consegna","Prezzo","Metodo"
-        ])
+        df = pd.DataFrame(columns=["Data", "Ora", "Marca", "Tipo", "Orario Consegna", "Prezzo", "Metodo"])
     else:
         df = pd.DataFrame(data)
-        df["Prezzo"] = (
-            df["Prezzo"]
-            .astype(str)
-            .str.replace(",", ".")
-            .str.replace(r"[^0-9.]", "", regex=True)
-            .astype(float)
-        )
-        df["Metodo"] = df["Metodo"].fillna("")
-
+        if "Prezzo" in df.columns:
+            df["Prezzo"] = df["Prezzo"].astype(str).str.replace(r"[^0-9.,]", "", regex=True)
+            df["Prezzo"] = df["Prezzo"].str.replace(",", ".").astype(float)
     return df, sheet
 
 df, sheet = load_data()
 
 # ---------------- LAYOUT ----------------
-col_form, col_lista = st.columns([1, 2])
+col_form, col_lista = st.columns([1,2])
 
-# ===================== NUOVO LAVAGGIO =====================
+# ===================== FORM NUOVO LAVAGGIO =====================
 with col_form:
     st.header("🚿 Nuovo Lavaggio")
+    with st.form("form_lavaggio"):
+        marca = st.selectbox("Marca Auto", options=MARCHE_AUTO)
+        tipo = st.selectbox("Tipo di Lavaggio", TIPI_LAVAGGIO)
+        ora_consegna = st.time_input("Orario previsto consegna", value=dt_time(10,0))
+        orario_min = dt_time(7,30)
+        orario_max = dt_time(20,0)
+        submit_enabled = ora_consegna >= orario_min and ora_consegna <= orario_max
+        if not submit_enabled:
+            st.warning(f"L'orario deve essere compreso tra {orario_min.strftime('%H:%M')} e {orario_max.strftime('%H:%M')}")
 
-    with st.form("nuovo_lavaggio"):
-        marca = st.selectbox("Marca auto", MARCHE_AUTO)
-        tipo = st.selectbox("Tipo lavaggio", TIPI_LAVAGGIO)
-        ora_consegna = st.time_input("Orario consegna", value=dt_time(10, 0))
-        prezzo = st.number_input("Prezzo (€)", min_value=0.0, step=1.0)
+        prezzo_sel = st.selectbox("Prezzo (€)", OPZIONI_PREZZO)
+        if prezzo_sel == "Altro":
+            prezzo_finale = st.number_input("Inserisci importo (€)", min_value=0.0, step=1.0)
+        else:
+            prezzo_finale = float(prezzo_sel.replace(" €",""))
 
-        ok = st.form_submit_button("✅ Registra")
-
-        if ok:
-            sheet.append_row([
+        submit = st.form_submit_button("✅ REGISTRA LAVAGGIO", disabled=not submit_enabled)
+        if submit:
+            row = [
                 datetime.now().strftime("%d/%m/%Y"),
                 datetime.now().strftime("%H:%M"),
                 marca,
                 tipo,
                 ora_consegna.strftime("%H:%M"),
-                prezzo,
-                ""
-            ])
-            st.success("Lavaggio registrato")
+                prezzo_finale,
+                ""  # Metodo pagamento vuoto
+            ]
+            sheet.append_row(row)
+            st.success("Lavaggio registrato!")
             st.cache_resource.clear()
-            st.rerun()
+            st.experimental_rerun()
 
-# ===================== AUTO DI OGGI =====================
+# ===================== LISTA AUTO INSERITE OGGI =====================
 with col_lista:
-    st.header("📋 Auto inserite oggi")
-
+    st.header("📋 Auto Inserite Oggi")
     oggi = datetime.now().strftime("%d/%m/%Y")
-    df_oggi = df[df["Data"] == oggi]
+    df_oggi = df[df["Data"]==oggi] if not df.empty else pd.DataFrame()
 
     if df_oggi.empty:
-        st.info("Nessun lavaggio oggi")
+        st.info("Nessuna auto inserita oggi.")
     else:
-        df_edit = df_oggi.copy()
-        df_edit["Metodo"] = df_edit["Metodo"].replace("", METODI_PAGAMENTO[0])
+        for idx, row in df_oggi.iterrows():
+            cols = st.columns([2,2,1.5,1.5,1])
+            with cols[0]:
+                st.markdown(f"**{row['Marca']}**")
+            with cols[1]:
+                st.markdown(f"**{row['Tipo']}**")
+            with cols[2]:
+                key_price = f"prezzo_{idx}"
+                if key_price not in st.session_state:
+                    st.session_state[key_price] = row['Prezzo'] if pd.notna(row['Prezzo']) else 0.0
 
-        edited = st.data_editor(
-            df_edit[["Marca","Tipo","Prezzo","Metodo"]],
-            num_rows="fixed",
-            use_container_width=True
-        )
+                prezzo_val = st.number_input("Prezzo (€)", min_value=0.0, value=st.session_state[key_price], step=1.0, key=key_price)
+                if prezzo_val != st.session_state[key_price]:
+                    # Aggiorna Google Sheet
+                    cell_list = sheet.findall(row['Ora'])
+                    for cell in cell_list:
+                        riga_google = cell.row
+                        if sheet.cell(riga_google,3).value == row['Marca'] and sheet.cell(riga_google,4).value == row['Tipo']:
+                            sheet.update_cell(riga_google,6,prezzo_val)
+                            st.session_state[key_price] = prezzo_val
+                            st.cache_resource.clear()
+                            st.experimental_rerun()
+                            break
 
-        for i, row in edited.iterrows():
-            orig = df_oggi.iloc[i]
-            if row["Prezzo"] != orig["Prezzo"] or row["Metodo"] != orig["Metodo"]:
-                celle = sheet.findall(orig["Ora"])
-                for c in celle:
-                    r = c.row
-                    if (
-                        sheet.cell(r,3).value == orig["Marca"]
-                        and sheet.cell(r,4).value == orig["Tipo"]
-                    ):
-                        sheet.update_cell(r, 6, row["Prezzo"])
-                        sheet.update_cell(r, 7, row["Metodo"])
-                        st.cache_resource.clear()
-                        st.rerun()
-                        break
+            with cols[3]:
+                key_metodo = f"metodo_{idx}"
+                if key_metodo not in st.session_state:
+                    st.session_state[key_metodo] = row['Metodo'] if row['Metodo'] in METODI_PAGAMENTO else METODI_PAGAMENTO[0]
 
-# ===================== MENU LATERALE =====================
-st.sidebar.title("Menu")
-menu = st.sidebar.selectbox(
-    "Sezione",
-    ["Registro e Calendario", "Chiusura Giornaliera"]
-)
+                metodo_val = st.selectbox("Metodo", METODI_PAGAMENTO, index=METODI_PAGAMENTO.index(st.session_state[key_metodo]), key=key_metodo)
+                if metodo_val != st.session_state[key_metodo]:
+                    # Aggiorna Google Sheet
+                    cell_list = sheet.findall(row['Ora'])
+                    for cell in cell_list:
+                        riga_google = cell.row
+                        if sheet.cell(riga_google,3).value == row['Marca'] and sheet.cell(riga_google,4).value == row['Tipo']:
+                            sheet.update_cell(riga_google,7,metodo_val)
+                            st.session_state[key_metodo] = metodo_val
+                            st.cache_resource.clear()
+                            st.experimental_rerun()
+                            break
 
-# ===================== REGISTRO =====================
+            with cols[4]:
+                cancella = st.button(f"❌ Cancella {idx}")
+                if cancella:
+                    cell_list = sheet.findall(row['Ora'])
+                    for cell in cell_list:
+                        riga_google = cell.row
+                        if sheet.cell(riga_google,3).value == row['Marca'] and sheet.cell(riga_google,4).value == row['Tipo']:
+                            sheet.delete_row(riga_google)
+                            st.success(f"Cancellato {row['Marca']}")
+                            st.cache_resource.clear()
+                            st.experimental_rerun()
+                            break
+
+# ===================== SIDEBAR =====================
+st.sidebar.title("Menu Autolavaggio")
+menu = st.sidebar.selectbox("Sezione", ["Registro e Calendario", "Chiusura Giornaliera"])
+
 if menu == "Registro e Calendario":
-    st.header("📅 Registro lavaggi")
-    data_sel = st.date_input("Data", value=date.today())
-    data_str = data_sel.strftime("%d/%m/%Y")
-    df_giorno = df[df["Data"] == data_str]
-
+    st.header("📅 Registro Lavaggi")
+    data_selezionata = st.date_input("Seleziona una data", value=date.today())
+    data_str = data_selezionata.strftime("%d/%m/%Y")
+    df_giorno = df[df["Data"]==data_str] if not df.empty else pd.DataFrame()
     if df_giorno.empty:
-        st.info("Nessun lavaggio")
+        st.info("Nessun lavaggio registrato in questa data.")
     else:
         st.dataframe(df_giorno, use_container_width=True)
 
-# ===================== CHIUSURA =====================
-else:
-    st.header("📊 Chiusura giornaliera")
-    df_oggi = df[df["Data"] == oggi]
-
-    if df_oggi.empty:
-        st.warning("Nessun lavaggio oggi")
+elif menu == "Chiusura Giornaliera":
+    st.header("📊 Chiusura del Giorno")
+    df_oggi_chiusura = df[df["Data"]==datetime.now().strftime("%d/%m/%Y")] if not df.empty else pd.DataFrame()
+    if df_oggi_chiusura.empty:
+        st.warning("Nessun lavaggio registrato oggi.")
     else:
-        st.metric("Auto lavate", len(df_oggi))
-        st.metric("Totale incasso", f"{df_oggi['Prezzo'].sum():.2f} €")
-
-        st.subheader("💳 Incasso per metodo")
-        incasso = (
-            df_oggi.groupby("Metodo")["Prezzo"]
-            .sum()
-            .reindex(METODI_PAGAMENTO, fill_value=0)
-        )
-        st.table(incasso.to_frame("Totale €"))
+        st.write(f"Auto lavate oggi: {len(df_oggi_chiusura)}")
+        st.write(f"Totale incassato oggi: {df_oggi_chiusura['Prezzo'].sum():.2f} €")
+        st.subheader("💳 Incasso per metodo di pagamento")
+        df_incasso_metodo = df_oggi_chiusura.groupby("Metodo")["Prezzo"].sum().reindex(METODI_PAGAMENTO, fill_value=0)
+        st.table(df_incasso_metodo.rename("Totale (€)").to_frame())
